@@ -14,7 +14,7 @@ def clean_job_summary(text):
     patterns = re.findall(r'([가-힣\w\s/]+?\s*\d+\s*명)', str(text))
     if patterns:
         return ", ".join([p.strip() for p in patterns])
-    return str(text)[:20] + "..."
+    return str(text)[:30] + "..." # 길이를 조금 더 허용
 
 # --- 점수 계산 엔진 ---
 def calculate_scores(app, comp, weights):
@@ -69,17 +69,16 @@ plus = st.sidebar.number_input("추가 상수 (M)", value=1)
 
 # --- 2. 데이터 업로드 및 초기화 ---
 st.title("🎯 매칭 및 배치 통합 관리 시스템")
-with st.expander("📂 데이터 파일 업로드 (기능 통합)", expanded=True):
+with st.expander("📂 데이터 파일 업로드 (이어서 작업하기 지원)", expanded=True):
     col_u1, col_u2 = st.columns(2)
     with col_u1:
-        st.markdown("### 📋 1단계: 원본 데이터 업로드")
+        st.markdown("### 📋 1. 원본 데이터 업로드")
         app_file = st.file_uploader("지원자 데이터 (CSV)", type="csv")
         comp_file = st.file_uploader("기업 데이터 (CSV)", type="csv")
     with col_u2:
-        st.markdown("### 📥 2단계: 작업 복구 (선택사항)")
-        history_file = st.file_uploader("최종 결과 CSV 불러오기 (기존 작업 이어하기)", type="csv")
+        st.markdown("### 📥 2. 작업 복구 (선택사항)")
+        history_file = st.file_uploader("최종 결과 CSV 불러오기", type="csv")
 
-# 데이터 로딩
 if app_file and comp_file:
     if 'apps_df' not in st.session_state:
         apps = pd.read_csv(app_file).fillna('')
@@ -97,10 +96,10 @@ if app_file and comp_file:
 apps_df = st.session_state.get('apps_df')
 comps_df = st.session_state.get('comps_df')
 
-# [기능 1: 신규 배치]
+# [알고리즘 실행]
 if apps_df is not None and comps_df is not None:
     if st.button("🚀 신규 배치 알고리즘 실행"):
-        with st.spinner("최적 매칭 계산 중..."):
+        with st.spinner("점수 계산 및 배치 중..."):
             score_matrix = []
             for _, app in apps_df.iterrows():
                 for _, comp in comps_df.iterrows():
@@ -143,9 +142,9 @@ if apps_df is not None and comps_df is not None:
                     "assigned_company": assigned_cname, **eval_data
                 })
             st.session_state['summary'] = pd.DataFrame(final_rows)
-            st.success("배치 완료!")
+            st.success("배치 알고리즘 실행 완료!")
 
-# [기능 2: 결과 복구]
+# [기존 결과 복구]
 if history_file is not None and comps_df is not None:
     if st.button("📥 기존 결과 복구하기"):
         hist_df = pd.read_csv(history_file).fillna('미배정')
@@ -158,9 +157,9 @@ if history_file is not None and comps_df is not None:
                 if len(cid_list) > 0: new_assigned[aid] = cid_list[0]
         st.session_state['assignments'] = new_assigned
         st.session_state['summary'] = hist_df
-        st.success("이전 작업 데이터를 성공적으로 복구했습니다.")
+        st.success("이전 작업 내용을 복구했습니다. 페이지를 이동하여 확인하세요.")
 
-# --- 4. 페이지별 출력 로직 ---
+# --- 4. 페이지별 출력 ---
 if 'summary' in st.session_state:
     df = st.session_state['summary']
     comps = st.session_state['comps_df']
@@ -168,7 +167,7 @@ if 'summary' in st.session_state:
     if menu == "1. 지원자 평가 점수표":
         st.subheader("📑 지원자 세부 평가 점수표")
         st.dataframe(df, use_container_width=True)
-        st.download_button("📥 전체 결과 다운로드", df.to_csv(index=False).encode('utf-8-sig'), "applicant_matching_scores.csv")
+        st.download_button("📥 전체 결과 CSV 다운로드", df.to_csv(index=False).encode('utf-8-sig'), "applicant_matching_scores.csv")
 
     elif menu == "2. 개인별 상세 리포트":
         st.subheader("👤 개인별 상세 리포트")
@@ -195,12 +194,12 @@ if 'summary' in st.session_state:
         st.subheader("🔄 2지망 매칭 현황 (구제자)")
         guje_df = df[(df['assigned_company'] == df['preferred_company_2_3']) & (df['assigned_company'] != df['preferred_company_1']) & (df['assigned_company'] != "미배정")]
         st.dataframe(guje_df, use_container_width=True)
-        st.download_button("📥 구제자 명단 다운로드", guje_df.to_csv(index=False).encode('utf-8-sig'), "recovery_matches.csv")
+        st.download_button("📥 구제자 명단 다운로드", guje_df.to_csv(index=False).encode('utf-8-sig'), "guje_list.csv")
 
     elif menu == "5. 종합 매칭 현황판 (이미지 형식)":
-        st.subheader("📊 종합 매칭 현황판 (고도화)")
+        st.subheader("📊 종합 매칭 현황판 (이미지 형식)")
         
-        # 가로 칸수 및 데이터 가공
+        # 데이터 집계
         p1_data, p2_data, pf_data = {}, {}, {}
         for c_name in comps['company_name']:
             p1_data[c_name] = df[(df['assigned_company'] == c_name) & (df['preferred_company_1'] == c_name)]['applicant_id'].tolist()
@@ -208,41 +207,74 @@ if 'summary' in st.session_state:
             pf_df = df[(df['preferred_company_1'] == c_name) & (df['assigned_company'] != c_name)]
             pf_data[c_name] = pf_df.sort_values('final_evaluation_score', ascending=False)['applicant_id'].tolist()
         
-        max_p1 = max([len(v) for v in p1_data.values()] + [1])
-        max_p2 = max([len(v) for v in p2_data.values()] + [1])
-        max_pf = max([len(v) for v in pf_data.values()] + [1])
+        max_p1, max_p2, max_pf = max([len(v) for v in p1_data.values()] + [1]), max([len(v) for v in p2_data.values()] + [1]), max([len(v) for v in pf_data.values()] + [1])
 
-        # CSS 고도화: 폰트 2배(22px), 열폭 조정(지원분야 2배), 글자색(연두색)
+        # CSS 고도화: 폰트 2배(22px), 열폭 조정(지원분야 3배), 색상 변경(연두색)
         st.markdown(f"""
         <style>
-        .m-table {{ width: 100%; border-collapse: collapse; font-size: 22px; text-align: center; }}
-        .m-table th, .m-table td {{ border: 1px solid #ddd; padding: 12px; }}
+        .m-table {{ width: 100%; border-collapse: collapse; font-size: 22px; text-align: center; table-layout: fixed; }}
+        .m-table th, .m-table td {{ border: 1px solid #ddd; padding: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
         .bg-gray {{ background-color: #f2f2f2; font-weight: bold; color: black; }}
         .deficit-red {{ color: #FF0000; font-weight: bold; }}
         .red-text {{ color: #FF0000; font-weight: bold; cursor: help; }}
-        .green-text {{ color: #32CD32; font-weight: bold; cursor: help; text-decoration: underline; }} /* 연두색(LimeGreen) */
+        .green-text {{ color: #32CD32; font-weight: bold; cursor: help; text-decoration: underline; }}
         .tooltip {{ position: relative; display: inline-block; }}
-        .tooltip .tooltiptext {{ visibility: hidden; width: 200px; background-color: black; color: #fff; text-align: center; border-radius: 6px; padding: 8px; position: absolute; z-index: 100; bottom: 125%; left: 50%; margin-left: -100px; opacity: 0; transition: opacity 0.3s; font-size: 16px; }}
+        .tooltip .tooltiptext {{ visibility: hidden; width: 220px; background-color: black; color: #fff; text-align: center; border-radius: 6px; padding: 8px; position: absolute; z-index: 100; bottom: 125%; left: 50%; margin-left: -110px; opacity: 0; transition: opacity 0.3s; font-size: 16px; }}
         .tooltip:hover .tooltiptext {{ visibility: visible; opacity: 1; }}
-        /* 열폭 조정: 2번(사업장) 대비 3번(분야)을 2배로 */
-        .col-comp {{ width: 150px; }}
-        .col-job {{ width: 300px; }}
+        
+        /* 열폭 조정 섹션 */
+        .col-id {{ width: 60px; }}
+        .col-comp {{ width: 200px; }}  /* 사업장 폭 기준 */
+        .col-job {{ width: 600px; }}   /* 분야 폭을 사업장의 3배로 설정 */
+        .col-num {{ width: 80px; }}
+        .col-app-id {{ width: 100px; }}
         </style>
         """, unsafe_allow_html=True)
 
-        html = f"<table class='m-table'><tr class='bg-gray'><th rowspan='2'>연번</th><th rowspan='2' class='col-comp'>지원 사업장</th><th rowspan='2' class='col-job'>지원 분야(요약)</th><th rowspan='2'>채용</th><th rowspan='2'>지원</th><th rowspan='2'>배수</th><th rowspan='2'>배정</th><th rowspan='2'>부족</th><th colspan='{max_p1}'>1차 배정</th><th colspan='{max_p2}'>2차 배정</th><th colspan='{max_pf}'>1차 탈락(점수순)</th></tr><tr class='bg-gray'>"
-        for _ in range(max_p1 + max_p2 + max_pf): html += "<th></th>"
+        # 테이블 헤더 생성
+        html = f"<table class='m-table'>"
+        html += f"""
+        <tr class='bg-gray'>
+            <th rowspan='2' class='col-id'>연번</th>
+            <th rowspan='2' class='col-comp'>지원 사업장</th>
+            <th rowspan='2' class='col-job'>지원 분야(요약)</th>
+            <th rowspan='2' class='col-num'>채용</th>
+            <th rowspan='2' class='col-num'>지원</th>
+            <th rowspan='2' class='col-num'>배수</th>
+            <th rowspan='2' class='col-num'>배정</th>
+            <th rowspan='2' class='col-num'>부족</th>
+            <th colspan='{max_p1}'>1차 배정</th>
+            <th colspan='{max_p2}'>2차 배정</th>
+            <th colspan='{max_pf}'>1차 탈락(점수순)</th>
+        </tr>
+        <tr class='bg-gray'>
+        """
+        for _ in range(max_p1 + max_p2 + max_pf): html += "<th class='col-app-id'></th>"
         html += "</tr>"
         
+        # 테이블 바디 생성
         for i, (_, row) in enumerate(comps.iterrows(), 1):
             c = row['company_name']
             p1, p2, pf = p1_data[c], p2_data[c], pf_data[c]
             assigned_total = len(p1) + len(p2)
             deficit = max(0, row['recruitment_headcount_total'] - assigned_total)
             job_text = clean_job_summary(row.get('recruitment_summary', ''))
-            html += f"<tr><td>{i}</td><td class='col-comp'>{c}</td><td class='col-job'>{job_text}</td><td>{row['recruitment_headcount_total']}</td><td>{len(df[df['preferred_company_1'] == c])}</td><td>{row['capacity']}</td><td>{assigned_total}</td><td class='{'deficit-red' if deficit > 0 else ''}'>{deficit}</td>"
+            
+            html += f"<tr>"
+            html += f"<td>{i}</td>"
+            html += f"<td class='col-comp'>{c}</td>"
+            html += f"<td class='col-job' title='{row.get('recruitment_summary', '')}'>{job_text}</td>"
+            html += f"<td>{row['recruitment_headcount_total']}</td>"
+            html += f"<td>{len(df[df['preferred_company_1'] == c])}</td>"
+            html += f"<td>{row['capacity']}</td>"
+            html += f"<td>{assigned_total}</td>"
+            html += f"<td class='{'deficit-red' if deficit > 0 else ''}'>{deficit}</td>"
+            
+            # 1차 배정 칸
             for j in range(max_p1): html += f"<td>{p1[j] if j < len(p1) else ''}</td>"
+            # 2차 배정 칸
             for j in range(max_p2): html += f"<td>{p2[j] if j < len(p2) else ''}</td>"
+            # 탈락자 칸 (스타일 적용)
             for j in range(max_pf):
                 if j < len(pf):
                     aid = pf[j]
@@ -251,14 +283,16 @@ if 'summary' in st.session_state:
                     if cand['assigned_company'] == "미배정": 
                         html += f"<td><div class='tooltip red-text'>{aid}<span class='tooltiptext'>{tip}<br>(미배정)</span></div></td>"
                     else: 
-                        # 파란색에서 연두색(green-text)으로 변경
                         html += f"<td><div class='tooltip green-text'>{aid}<span class='tooltiptext'>{tip}<br>(배정지: {cand['assigned_company']})</span></div></td>"
                 else: html += "<td></td>"
             html += "</tr>"
-        st.markdown(html + "</table>", unsafe_allow_html=True)
         
+        html += "</table>"
+        st.markdown(html, unsafe_allow_html=True)
+        
+        # 수동 배치 기능
         st.divider()
-        st.subheader("🛠️ 수동 배치 및 최종 확정")
+        st.subheader("🛠️ 미배정 인원 수동 배치 및 조정")
         unassigned_list = df[df['assigned_company'] == "미배정"]['applicant_id'].tolist()
         c_m1, c_m2, c_m3 = st.columns([2, 2, 1])
         with c_m1: s_aid = st.selectbox("수동 배치 지원자 번호", ["선택"] + unassigned_list)
@@ -273,6 +307,6 @@ if 'summary' in st.session_state:
                     time.sleep(1)
                     st.rerun()
 
-        st.download_button("💾 전체 작업 결과 저장 (CSV)", df.to_csv(index=False).encode('utf-8-sig'), "final_matching_results.csv")
+        st.download_button("💾 전체 작업 결과 파일 다운로드 (작업 저장용)", df.to_csv(index=False).encode('utf-8-sig'), "final_matching_results.csv")
 else:
     st.info("지원자/기업 CSV 파일을 업로드하거나 기존 작업 결과를 불러와주세요.")

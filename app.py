@@ -31,21 +31,40 @@ plus = st.sidebar.number_input("추가 상수 (M)", value=1)
 
 # --- 점수 계산 함수 ---
 def calculate_scores(app, comp):
-    app_text = f"{app['experience_keywords']} {app['tool_keywords']} {app['essay_full_text']}".lower()
-    major_s = w_major if str(app['major']).strip() in str(comp['recruitment_job_groups']).strip() else 0
-    req_list = [k.strip().lower() for k in str(comp['required_keywords_raw']).split(',') if k.strip()]
+    # 텍스트 데이터가 없을 경우 빈 문자열 처리
+    exp_key = str(app.get('experience_keywords', ''))
+    tool_key = str(app.get('tool_keywords', ''))
+    essay = str(app.get('essay_full_text', ''))
+    app_text = f"{exp_key} {tool_key} {essay}".lower()
+    
+    major_s = w_major if str(app.get('major', '')).strip() in str(comp.get('recruitment_job_groups', '')).strip() else 0
+    
+    req_list = [k.strip().lower() for k in str(comp.get('required_keywords_raw', '')).split(',') if k.strip()]
     req_match = sum(1 for k in req_list if k in app_text)
     req_s = req_match * w_req
-    pref_list = [k.strip().lower() for k in str(comp['preferred_keywords_raw']).split(',') if k.strip()]
+    
+    pref_list = [k.strip().lower() for k in str(comp.get('preferred_keywords_raw', '')).split(',') if k.strip()]
     pref_match = sum(1 for k in pref_list if k in app_text)
     pref_s = pref_match * w_pref
-    exp_s = app['experience_count'] * w_exp + app['job_training_count'] * 2
-    port_s = 15 if app['has_portfolio'] else 0
-    doc_s = app['document_completeness_score'] * w_doc
-    pref_b = w_first if app['preferred_company_1'] == comp['company_name'] else (w_second if app['preferred_company_2_3'] == comp['company_name'] else 0)
+    
+    exp_count = float(app.get('experience_count', 0))
+    train_count = float(app.get('job_training_count', 0))
+    exp_s = exp_count * w_exp + train_count * 2
+    
+    port_s = 15 if app.get('has_portfolio', False) else 0
+    doc_s = float(app.get('document_completeness_score', 0)) * w_doc
+    
+    # 지망 가산점 (안전한 키 접근)
+    p1 = str(app.get('preferred_company_1', '')).strip()
+    p2_3 = str(app.get('preferred_company_2_3', '')).strip()
+    c_name = str(comp.get('company_name', '')).strip()
+    
+    pref_b = 0
+    if p1 == c_name: pref_b = w_first
+    elif p2_3 == c_name: pref_b = w_second
     
     total = major_s + req_s + pref_s + exp_s + port_s + doc_s + pref_b
-    reason = f"필수 {req_match}개(+{req_s}), 경력 {app['experience_count']}건 반영, 문서성실도 {doc_s:.1f}점"
+    reason = f"필수 {req_match}개(+{req_s}), 경력 {int(exp_count)}건 반영, 문서성실도 {doc_s:.1f}점"
     
     return {
         "job_fit_score": major_s, "required_match_score": req_s, "preferred_match_score": pref_s,
@@ -61,12 +80,18 @@ with st.expander("📂 데이터 파일 업로드 (CSV)", expanded=True):
     with c2: comp_file = st.file_uploader("기업 데이터 업로드", type="csv")
 
 if app_file and comp_file:
+    # 컬럼명 앞뒤 공백 자동 제거하여 로드
     apps_df = pd.read_csv(app_file).fillna('')
+    apps_df.columns = [c.strip() for c in apps_df.columns]
     comps_df = pd.read_csv(comp_file).fillna('')
-    apps_df['preferred_company_1'] = apps_df['preferred_company_1'].str.strip()
-    apps_df['preferred_company_2_3'] = apps_df['preferred_company_2_3'].str.strip()
-    comps_df['company_name'] = comps_df['company_name'].str.strip()
-    comps_df['capacity'] = (comps_df['recruitment_headcount_total'] * mult + plus).astype(int)
+    comps_df.columns = [c.strip() for c in comps_df.columns]
+    
+    # 필수 기업명 공백 제거
+    apps_df['preferred_company_1'] = apps_df['preferred_company_1'].astype(str).str.strip()
+    if 'preferred_company_2_3' in apps_df.columns:
+        apps_df['preferred_company_2_3'] = apps_df['preferred_company_2_3'].astype(str).str.strip()
+    comps_df['company_name'] = comps_df['company_name'].astype(str).str.strip()
+    comps_df['capacity'] = (comps_df['recruitment_headcount_total'].astype(float) * mult + plus).astype(int)
 
     if st.button("🚀 배치 알고리즘 실행"):
         with st.spinner("계산 및 배치 중..."):
@@ -77,11 +102,11 @@ if app_file and comp_file:
                     score_matrix.append({
                         "applicant_id": app['applicant_id'], "applicant_name": app['applicant_name'],
                         "company_id": comp['company_id'], "company_name": comp['company_name'],
-                        "score": res['final_evaluation_score'], "pref_level": 1 if app['preferred_company_1'] == comp['company_name'] else (2 if app['preferred_company_2_3'] == comp['company_name'] else 0)
+                        "score": res['final_evaluation_score'], 
+                        "pref_level": 1 if app['preferred_company_1'] == comp['company_name'] else (2 if app.get('preferred_company_2_3', '') == comp['company_name'] else 0)
                     })
             score_df = pd.DataFrame(score_matrix)
             assigned = {}
-            # Pass 1 & 2
             for cid in comps_df['company_id']:
                 cap = comps_df[comps_df['company_id'] == cid]['capacity'].values[0]
                 p1 = score_df[(score_df['company_id'] == cid) & (score_df['pref_level'] == 1)].sort_values('score', ascending=False)
@@ -107,15 +132,18 @@ if app_file and comp_file:
                 
                 eval_data = calculate_scores(app, c_row)
                 final_summary.append({
-                    "applicant_id": aid, "applicant_name": app['applicant_name'],
-                    "preferred_company_1": app['preferred_company_1'], "preferred_company_2_3": app['preferred_company_2_3'],
-                    "assigned_company": assigned_cname, **eval_data
+                    "applicant_id": aid, 
+                    "applicant_name": app['applicant_name'],
+                    "preferred_company_1": app['preferred_company_1'], 
+                    "preferred_company_2_3": app.get('preferred_company_2_3', '정보없음'),
+                    "assigned_company": assigned_cname, 
+                    **eval_data
                 })
             st.session_state['summary'] = pd.DataFrame(final_summary)
             st.session_state['comps'] = comps_df
             st.success("배치 완료!")
 
-# --- 페이지별 출력 로직 (여기가 핵심) ---
+# --- 페이지별 출력 로직 ---
 if 'summary' in st.session_state:
     df = st.session_state['summary']
     comps = st.session_state['comps']
@@ -123,20 +151,39 @@ if 'summary' in st.session_state:
     if menu == "1. 지원자 평가 점수표":
         st.subheader("📑 지원자 세부 평가 및 지망 정보")
         v_cols = ["applicant_id", "applicant_name", "preferred_company_1", "preferred_company_2_3", "assigned_company", "final_evaluation_score", "job_fit_score", "required_match_score", "experience_match_score", "document_score"]
-        st.dataframe(df[v_cols], use_container_width=True)
-        st.download_button("CSV 다운로드", df.to_csv(index=False).encode('utf-8-sig'), "summary.csv")
+        st.dataframe(df[[c for c in v_cols if c in df.columns]], use_container_width=True)
 
     elif menu == "2. 개인별 상세 리포트":
         st.subheader("👤 개인별 상세 리포트")
-        sel_aid = st.selectbox("지원자 선택", df['applicant_id'].tolist(), format_func=lambda x: f"{x} ({df[df['applicant_id']==x]['applicant_name'].values[0]})")
+        # 지원자 리스트 생성
+        aid_list = df['applicant_id'].tolist()
+        sel_aid = st.selectbox("지원자 선택", aid_list, format_func=lambda x: f"{x} ({df[df['applicant_id']==x]['applicant_name'].values[0]})")
+        
+        # 선택된 지원자 데이터 추출
         row = df[df['applicant_id'] == sel_aid].iloc[0]
+        
         c_l, c_r = st.columns(2)
         with c_l:
-            st.info(f"### {row['applicant_name']}\n**1지망**: {row['preferred_company_1']}\n**2지망**: {row['preferred_company_2_3']}\n**최종 배정**: {row['assigned_company']}")
-            st.metric("종합 점수", f"{row['final_evaluation_score']}점")
-            st.success(f"**산출 근거**: {row['score_reason_summary']}")
+            # 안전하게 데이터 가져오기
+            p1 = row.get('preferred_company_1', '정보없음')
+            p2 = row.get('preferred_company_2_3', '정보없음')
+            a_c = row.get('assigned_company', '미배정')
+            name = row.get('applicant_name', '이름없음')
+            score = row.get('final_evaluation_score', 0)
+            reason = row.get('score_reason_summary', '근거 없음')
+            
+            st.info(f"### {name}\n**1지망**: {p1}\n**2지망**: {p2}\n**최종 배정**: {a_c}")
+            st.metric("종합 점수", f"{score}점")
+            st.success(f"**산출 근거**: {reason}")
+            
         with c_r:
-            st.bar_chart(pd.Series({"직무": row['job_fit_score'], "필수": row['required_match_score'], "경력": row['experience_match_score'], "문서": row['document_score'], "가점": row['preference_bonus_score']}))
+            st.bar_chart(pd.Series({
+                "직무": row.get('job_fit_score', 0), 
+                "필수": row.get('required_match_score', 0), 
+                "경력": row.get('experience_match_score', 0), 
+                "문서": row.get('document_score', 0), 
+                "가점": row.get('preference_bonus_score', 0)
+            }))
 
     elif menu == "3. 기업별 매칭 결과":
         st.subheader("🏢 기업별 배정 현황")
@@ -148,15 +195,23 @@ if 'summary' in st.session_state:
 
     elif menu == "4. 2지망 매칭 현황 (구제자)":
         st.subheader("🔄 2지망 매칭 현황")
-        second_df = df[(df['assigned_company'] == df['preferred_company_2_3']) & (df['assigned_company'] != df['preferred_company_1']) & (df['assigned_company'] != "미배정")]
-        st.dataframe(second_df[["applicant_id", "applicant_name", "preferred_company_1", "assigned_company", "final_evaluation_score"]], use_container_width=True)
+        # 컬럼 존재 여부 확인 후 필터링
+        if 'preferred_company_2_3' in df.columns:
+            second_df = df[(df['assigned_company'] == df['preferred_company_2_3']) & (df['assigned_company'] != df['preferred_company_1']) & (df['assigned_company'] != "미배정")]
+            st.dataframe(second_df[["applicant_id", "applicant_name", "preferred_company_1", "assigned_company", "final_evaluation_score"]], use_container_width=True)
+        else:
+            st.error("2지망 기업 정보가 없습니다.")
 
     elif menu == "5. 종합 매칭 현황판 (상세 지표)":
         st.subheader("📊 종합 매칭 현황판")
+        # 가변 칸수 계산을 위해 안전한 필터링
         p1_data = {c: df[(df['assigned_company'] == c) & (df['preferred_company_1'] == c)]['applicant_id'].tolist() for c in comps['company_name']}
-        p2_data = {c: df[(df['assigned_company'] == c) & (df['preferred_company_1'] != c) & (df['assigned_company'] != "미배정")]['applicant_id'].tolist() for c in comps['company_name']}
+        p2_data = {c: df[(df['assigned_company'] == c) & (df.get('preferred_company_2_3', '') == c) & (df['assigned_company'] != df['preferred_company_1'])]['applicant_id'].tolist() for c in comps['company_name']}
         pf_data = {c: df[(df['preferred_company_1'] == c) & (df['assigned_company'] != c)]['applicant_id'].tolist() for c in comps['company_name']}
-        max_p1, max_p2, max_pf = max([len(v) for v in p1_data.values()] + [1]), max([len(v) for v in p2_data.values()] + [1]), max([len(v) for v in pf_data.values()] + [1])
+        
+        max_p1 = max([len(v) for v in p1_data.values()] + [1])
+        max_p2 = max([len(v) for v in p2_data.values()] + [1])
+        max_pf = max([len(v) for v in pf_data.values()] + [1])
 
         st.markdown(f"<style>.m-table {{ width: 100%; border-collapse: collapse; font-size: 11px; text-align: center; }} .m-table th, .m-table td {{ border: 1px solid #ddd; padding: 6px; }} .bg-gray {{ background-color: #f2f2f2; font-weight: bold; color: black; }} .deficit-red {{ color: red; font-weight: bold; }} .red-text {{ color: red; font-weight: bold; cursor: help; }} .blue-text {{ color: blue; text-decoration: underline; cursor: help; }} .tooltip {{ position: relative; display: inline-block; }} .tooltip .tooltiptext {{ visibility: hidden; width: 140px; background-color: black; color: #fff; text-align: center; border-radius: 6px; padding: 5px; position: absolute; z-index: 1; bottom: 125%; left: 50%; margin-left: -70px; opacity: 0; transition: opacity 0.3s; }} .tooltip:hover .tooltiptext {{ visibility: visible; opacity: 1; }} </style>", unsafe_allow_html=True)
         html = f"<table class='m-table'><tr class='bg-gray'><th rowspan='2'>연번</th><th rowspan='2'>지원 사업장</th><th rowspan='2'>채용인원</th><th rowspan='2'>지원인원</th><th rowspan='2'>배수정원</th><th rowspan='2'>배정인원</th><th rowspan='2'>부족인원</th><th colspan='{max_p1}'>1차 배정</th><th colspan='{max_p2}'>2차 배정</th><th colspan='{max_pf}'>1차 탈락</th></tr><tr class='bg-gray'>"
@@ -174,7 +229,8 @@ if 'summary' in st.session_state:
             for j in range(max_pf):
                 if j < len(pf):
                     aid = pf[j]
-                    dest = df[df['applicant_id'] == aid]['assigned_company'].values[0]
+                    target_row = df[df['applicant_id'] == aid]
+                    dest = target_row['assigned_company'].values[0] if not target_row.empty else "미배정"
                     if dest == "미배정": html += f"<td><div class='tooltip red-text'>{aid}<span class='tooltiptext'>미배정</span></div></td>"
                     else: html += f"<td><div class='tooltip blue-text'>{aid}<span class='tooltiptext'>배정지: {dest}</span></div></td>"
                 else: html += "<td></td>"

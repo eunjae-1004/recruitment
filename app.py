@@ -9,7 +9,12 @@ st.set_page_config(layout="wide", page_title="미청 매칭 & 평가 시스템")
 
 # --- 1. 사이드바: 운영 관리 메뉴 ---
 st.sidebar.title("🛠️ 운영 관리 메뉴")
-menu = st.sidebar.radio("페이지 이동", ["1. 지원자 평가 점수표", "2. 개인별 상세 리포트", "3. 기업별 매칭 결과"])
+menu = st.sidebar.radio("페이지 이동", [
+    "1. 지원자 평가 점수표", 
+    "2. 개인별 상세 리포트", 
+    "3. 기업별 매칭 결과",
+    "4. 2지망 매칭 현황 (구제자)"
+])
 
 st.sidebar.divider()
 st.sidebar.header("⚖️ 가중치 설정")
@@ -89,11 +94,13 @@ if app_file and comp_file:
             score_df = pd.DataFrame(score_matrix)
             
             assigned = {}
+            # Pass 1: 1순위 지망자 우선 배치
             for cid in comps_df['company_id']:
                 cap = comps_df[comps_df['company_id'] == cid]['capacity'].values[0]
                 p1_pool = score_df[(score_df['company_id'] == cid) & (score_df['pref_level'] == 1)].sort_values('score', ascending=False)
                 for aid in p1_pool.head(cap)['applicant_id']: assigned[aid] = cid
             
+            # Pass 2: 미배정자 중 2순위 지망자 배치
             unassigned = set(apps_df['applicant_id']) - set(assigned.keys())
             for cid in comps_df['company_id']:
                 rem = comps_df[comps_df['company_id'] == cid]['capacity'].values[0] - sum(1 for v in assigned.values() if v == cid)
@@ -127,19 +134,15 @@ if app_file and comp_file:
     if 'summary' in st.session_state:
         df = st.session_state['summary']
 
+        # [1페이지: 점수표]
         if menu == "1. 지원자 평가 점수표":
-            st.subheader("📑 지원자 세부 평가 및 지망 정보 현황")
-            view_cols = [
-                "applicant_id", "applicant_name", "preferred_company_1", "preferred_company_2_3", 
-                "assigned_company", "final_evaluation_score", "job_fit_score", 
-                "required_match_score", "experience_match_score", "document_score"
-            ]
+            st.subheader("📑 지원자 세부 평가 및 지망 정보")
+            view_cols = ["applicant_id", "applicant_name", "preferred_company_1", "preferred_company_2_3", "assigned_company", "final_evaluation_score", "job_fit_score", "required_match_score", "experience_match_score", "document_score"]
             st.dataframe(df[view_cols], use_container_width=True)
-            csv = df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("📥 결과 다운로드", data=csv, file_name="matching_summary.csv")
 
+        # [2페이지: 개인 리포트]
         elif menu == "2. 개인별 상세 리포트":
-            st.subheader("👤 개인별 상세 리포트")
+            st.subheader("👤 개인 상세 리포트")
             sel_aid = st.selectbox("지원자 선택", df['applicant_id'].tolist(), format_func=lambda x: f"{x} ({df[df['applicant_id']==x]['applicant_name'].values[0]})")
             row = df[df['applicant_id'] == sel_aid].iloc[0]
             c_l, c_r = st.columns(2)
@@ -148,11 +151,9 @@ if app_file and comp_file:
                 st.metric("종합 점수", f"{row['final_evaluation_score']}점")
                 st.success(f"**산출 근거**: {row['score_reason_summary']}")
             with c_r:
-                st.bar_chart(pd.Series({
-                    "직무": row['job_fit_score'], "필수": row['required_match_score'],
-                    "경력": row['experience_match_score'], "문서": row['document_score'], "가점": row['preference_bonus_score']
-                }))
+                st.bar_chart(pd.Series({"직무": row['job_fit_score'], "필수": row['required_match_score'], "경력": row['experience_match_score'], "문서": row['document_score'], "가점": row['preference_bonus_score']}))
 
+        # [3페이지: 기업별 결과]
         elif menu == "3. 기업별 매칭 결과":
             st.subheader("🏢 기업별 배정 명단")
             for _, c in st.session_state['comps'].iterrows():
@@ -161,3 +162,45 @@ if app_file and comp_file:
                     if not c_res.empty:
                         st.table(c_res[["applicant_id", "applicant_name", "preferred_company_1", "final_evaluation_score", "score_reason_summary"]])
                     else: st.write("배정 인원 없음")
+
+        # [4페이지: 2지망 매칭 현황]
+        elif menu == "4. 2지망 매칭 현황 (구제자)":
+            st.subheader("🔄 2지망 기업 매칭 현황 (1순위 탈락자)")
+            st.markdown("1지망 기업에는 정원 초과로 배정되지 못했으나, **2지망 기업에 성공적으로 매칭**된 지원자 명단입니다.")
+            
+            # 로직: 배정된 기업이 1지망이 아니면서, 2지망과 일치하는 경우 필터링
+            second_match_df = df[
+                (df['assigned_company'] == df['preferred_company_2_3']) & 
+                (df['assigned_company'] != df['preferred_company_1']) &
+                (df['assigned_company'] != "미배정")
+            ]
+            
+            if not second_match_df.empty:
+                st.info(f"총 **{len(second_match_df)}명**의 지원자가 2지망 기업에 구제되었습니다.")
+                
+                # 가독성을 위해 컬럼 재구성
+                display_cols = [
+                    "applicant_id", 
+                    "applicant_name", 
+                    "preferred_company_1", # 실패한 기업
+                    "assigned_company",    # 매칭된 기업 (2지망)
+                    "final_evaluation_score", 
+                    "score_reason_summary"
+                ]
+                
+                # 컬럼명 변경 (이해하기 쉽게)
+                result_view = second_match_df[display_cols].rename(columns={
+                    "preferred_company_1": "1지망 (탈락)",
+                    "assigned_company": "배정기업 (2지망)",
+                    "final_evaluation_score": "매칭점수"
+                })
+                
+                st.dataframe(result_view, use_container_width=True)
+                
+                # 다운로드 버튼
+                csv_2 = result_view.to_csv(index=False).encode('utf-8-sig')
+                st.download_button("📥 2지망 매칭 명단 다운로드", data=csv_2, file_name="second_choice_matches.csv")
+            else:
+                st.warning("2지망 기업에 매칭된 지원자가 없습니다.")
+else:
+    st.info("파일 업로드 후 배치를 실행해 주세요.")

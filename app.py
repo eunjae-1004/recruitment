@@ -14,7 +14,7 @@ menu = st.sidebar.radio("페이지 이동", [
     "2. 개인별 상세 리포트", 
     "3. 기업별 매칭 결과",
     "4. 2지망 매칭 현황 (구제자)",
-    "5. 종합 매칭 현황판 (가변 칸수 적용)"
+    "5. 종합 매칭 현황판 (상세 지표 추가)"
 ])
 
 st.sidebar.divider()
@@ -44,7 +44,7 @@ def calculate_scores(app, comp):
     doc_s = app['document_completeness_score'] * w_doc
     pref_b = w_first if app['preferred_company_1'] == comp['company_name'] else (w_second if app['preferred_company_2_3'] == comp['company_name'] else 0)
     total = major_s + req_s + pref_s + exp_s + port_s + doc_s + pref_b
-    return {"score": round(total, 2), "reason": f"매칭점수 {total:.1f}"}
+    return {"score": round(total, 2)}
 
 # --- 데이터 업로드 및 배치 로직 ---
 if app_file := st.file_uploader("지원자 데이터 업로드", type="csv"):
@@ -54,7 +54,6 @@ if app_file := st.file_uploader("지원자 데이터 업로드", type="csv"):
         apps_df['preferred_company_1'] = apps_df['preferred_company_1'].str.strip()
         apps_df['preferred_company_2_3'] = apps_df['preferred_company_2_3'].str.strip()
         comps_df['company_name'] = comps_df['company_name'].str.strip()
-        # 내부 계산용 정원(Capacity)
         comps_df['capacity'] = (comps_df['recruitment_headcount_total'] * mult + plus).astype(int)
 
         if st.button("🚀 배치 알고리즘 실행"):
@@ -66,18 +65,18 @@ if app_file := st.file_uploader("지원자 데이터 업로드", type="csv"):
                         score_matrix.append({
                             "applicant_id": app['applicant_id'], "applicant_name": app['applicant_name'],
                             "company_id": comp['company_id'], "company_name": comp['company_name'],
-                            "score": res['score'], "reason": res['reason'],
+                            "score": res['score'],
                             "pref_level": 1 if app['preferred_company_1'] == comp['company_name'] else (2 if app['preferred_company_2_3'] == comp['company_name'] else 0)
                         })
                 score_df = pd.DataFrame(score_matrix)
                 
                 assigned = {}
-                # Pass 1: 1순위
+                # Pass 1
                 for cid in comps_df['company_id']:
                     cap = comps_df[comps_df['company_id'] == cid]['capacity'].values[0]
                     p1_pool = score_df[(score_df['company_id'] == cid) & (score_df['pref_level'] == 1)].sort_values('score', ascending=False)
                     for aid in p1_pool.head(cap)['applicant_id']: assigned[aid] = cid
-                # Pass 2: 2순위 구제
+                # Pass 2
                 unassigned = set(apps_df['applicant_id']) - set(assigned.keys())
                 for cid in comps_df['company_id']:
                     rem = comps_df[comps_df['company_id'] == cid]['capacity'].values[0] - sum(1 for v in assigned.values() if v == cid)
@@ -92,23 +91,22 @@ if app_file := st.file_uploader("지원자 데이터 업로드", type="csv"):
                     cname = comps_df[comps_df['company_id'] == target_cid]['company_name'].values[0] if target_cid else "미배정"
                     final_res.append({
                         "applicant_id": aid, "applicant_name": app['applicant_name'],
-                        "preferred_company_1": app['preferred_company_1'].strip(),
-                        "preferred_company_2_3": app['preferred_company_2_3'].strip(),
+                        "preferred_company_1": app['preferred_company_1'],
                         "assigned_company": cname
                     })
                 st.session_state['summary'] = pd.DataFrame(final_res)
                 st.session_state['comps'] = comps_df
                 st.success("배치가 완료되었습니다!")
 
-# --- 페이지 출력부 ---
+# --- 5번 페이지 상세 구현 ---
 if 'summary' in st.session_state:
     df = st.session_state['summary']
     comps = st.session_state['comps']
 
-    if menu == "5. 종합 매칭 현황판 (가변 칸수 적용)":
+    if menu == "5. 종합 매칭 현황판 (상세 지표 추가)":
         st.subheader("📊 종합 매칭 현황판")
         
-        # 가변 칸수 계산을 위해 최대값 산출
+        # 가변 칸수 계산
         p1_data = {c: df[(df['assigned_company'] == c) & (df['preferred_company_1'] == c)]['applicant_id'].tolist() for c in comps['company_name']}
         p2_data = {c: df[(df['assigned_company'] == c) & (df['preferred_company_1'] != c) & (df['assigned_company'] != "미배정")]['applicant_id'].tolist() for c in comps['company_name']}
         pf_data = {c: df[(df['preferred_company_1'] == c) & (df['assigned_company'] != c)]['applicant_id'].tolist() for c in comps['company_name']}
@@ -120,8 +118,9 @@ if 'summary' in st.session_state:
         st.markdown(f"""
         <style>
         .m-table {{ width: 100%; border-collapse: collapse; font-size: 11px; text-align: center; }}
-        .m-table th, .m-table td {{ border: 1px solid #ddd; padding: 4px; }}
+        .m-table th, .m-table td {{ border: 1px solid #ddd; padding: 6px; }}
         .bg-gray {{ background-color: #f2f2f2; font-weight: bold; color: black; }}
+        .deficit-red {{ color: red; font-weight: bold; }}
         .red-text {{ color: red; font-weight: bold; cursor: help; }}
         .blue-text {{ color: blue; text-decoration: underline; cursor: help; }}
         .tooltip {{ position: relative; display: inline-block; }}
@@ -131,13 +130,23 @@ if 'summary' in st.session_state:
         """, unsafe_allow_html=True)
 
         html = f"<table class='m-table'>"
+        # 헤더 1행
         html += f"""
         <tr class='bg-gray'>
-            <th rowspan='2'>연번</th><th rowspan='2'>지원 사업장</th><th rowspan='2'>배치인원</th><th rowspan='2'>지원인원</th>
-            <th colspan='{max_p1}'>1차 배정인원</th><th colspan='{max_p2}'>2차 배정인원</th><th colspan='{max_pf}'>1차 지원 탈락인원</th>
+            <th rowspan='2'>연번</th>
+            <th rowspan='2'>지원 사업장</th>
+            <th rowspan='2'>채용인원</th>
+            <th rowspan='2'>지원인원</th>
+            <th rowspan='2'>채용인원 배수</th>
+            <th rowspan='2'>배정인원수</th>
+            <th rowspan='2'>부족인원수</th>
+            <th colspan='{max_p1}'>1차 배정인원</th>
+            <th colspan='{max_p2}'>2차 배정인원</th>
+            <th colspan='{max_pf}'>1차 지원 탈락인원</th>
         </tr>
         <tr class='bg-gray'>
         """
+        # 헤더 2행 (가변 칸들용)
         for _ in range(max_p1): html += "<th></th>"
         for _ in range(max_p2): html += "<th></th>"
         for _ in range(max_pf): html += "<th></th>"
@@ -145,21 +154,26 @@ if 'summary' in st.session_state:
 
         for i, (_, row) in enumerate(comps.iterrows(), 1):
             c = row['company_name']
-            total_applied = len(df[df['preferred_company_1'] == c])
+            hire_total = row['recruitment_headcount_total']
+            applied_total = len(df[df['preferred_company_1'] == c])
+            capacity = row['capacity']
             
-            html += f"<tr><td>{i}</td><td>{c}</td><td>{row['recruitment_headcount_total']}</td><td>{total_applied}</td>"
-            
-            # 1차 배정인원
             p1_list = p1_data[c]
-            for j in range(max_p1):
-                html += f"<td>{p1_list[j] if j < len(p1_list) else ''}</td>"
-            
-            # 2차 배정인원
             p2_list = p2_data[c]
-            for j in range(max_p2):
-                html += f"<td>{p2_list[j] if j < len(p2_list) else ''}</td>"
+            assigned_total = len(p1_list) + len(p2_list)
+            deficit = hire_total - assigned_total
             
-            # 1차 지원 탈락인원 (로직 및 스타일 적용)
+            # 부족 인원수 빨간색 처리
+            deficit_style = "class='deficit-red'" if deficit > 0 else ""
+            
+            html += f"<tr><td>{i}</td><td>{c}</td><td>{hire_total}</td><td>{applied_total}</td><td>{capacity}</td><td>{assigned_total}</td><td {deficit_style}>{deficit}</td>"
+            
+            # 1차 배정
+            for j in range(max_p1): html += f"<td>{p1_list[j] if j < len(p1_list) else ''}</td>"
+            # 2차 배정
+            for j in range(max_p2): html += f"<td>{p2_list[j] if j < len(p2_list) else ''}</td>"
+            
+            # 1차 탈락 (기존 로직 유지)
             pf_list = pf_data[c]
             for j in range(max_pf):
                 if j < len(pf_list):
@@ -169,16 +183,8 @@ if 'summary' in st.session_state:
                         html += f"<td><div class='tooltip red-text'>{aid}<span class='tooltiptext'>현재 미배정 상태</span></div></td>"
                     else:
                         html += f"<td><div class='tooltip blue-text'>{aid}<span class='tooltiptext'>배정지: {dest}</span></div></td>"
-                else:
-                    html += "<td></td>"
+                else: html += "<td></td>"
             html += "</tr>"
         
         html += "</table>"
         st.markdown(html, unsafe_allow_html=True)
-
-    # --- 나머지 페이지 (기존 유지) ---
-    elif menu == "1. 지원자 평가 점수표":
-        st.subheader("📑 지원자 세부 평가 및 지망 정보")
-        v_cols = ["applicant_id", "applicant_name", "preferred_company_1", "preferred_company_2_3", "assigned_company", "score", "reason"]
-        st.dataframe(df.rename(columns={"assigned_company": "최종배정기업"}), use_container_width=True)
-    # [2, 3, 4 페이지 생략 - 이전과 동일]

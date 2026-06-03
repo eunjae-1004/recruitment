@@ -27,9 +27,9 @@ def calculate_scores(app, comp):
     p2_3 = str(app.get('preferred_company_2_3', '')).strip()
     c_name = str(comp.get('company_name', '')).strip()
     
-    pref_b = 0
-    if p1 == c_name or p2_3 == c_name:
-        pref_b = W_BONUS
+    pref_b = 50
+#    if p1 == c_name or p2_3 == c_name:
+#        pref_b = W_BONUS
     
     # 2. 역량 항목 점수
     major_s = 10.0 if str(app.get('major', '')).strip() in str(comp.get('recruitment_job_groups', '')).strip() else 5.0

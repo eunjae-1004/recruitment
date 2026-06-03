@@ -39,7 +39,11 @@ def calculate_scores(app, comp):
     
     exp_count = float(app.get('experience_count', 0))
     exp_s = exp_count * 3.0 + float(app.get('job_training_count', 0)) * 2.0
-    doc_s = float(app.get('document_completeness_score', 0)) * 0.8
+
+    try:
+        doc_s = float(app.get('document_completeness_score', 0)) * 0.8
+    except:
+        doc_s = 0
     
     total = major_s + req_s + exp_s + doc_s + pref_b
     
